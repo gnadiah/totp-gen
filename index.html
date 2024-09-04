@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOTP Generator</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>TOTP Generator</h1>
+        <label for="otpauth">otpauth URL:</label>
+        <input type="text" id="otpauth" value="">
+        <button id="generate">Generate TOTP</button>
+        <p id="totp">Your TOTP will appear here</p>
+        <p id="time-left">Time left: </p>
+        <p id="current-time">Current Time: </p>
+    </div>
+</body>
+<script>
+function base32Decode(base32) {
+    const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let buffer = 0;
+    let bitsLeft = 0;
+    const bytes = [];
+
+    for (let i = 0; i < base32.length; i++) {
+        const value = base32Chars.indexOf(base32[i].toUpperCase());
+        if (value === -1) continue;
+
+        buffer = (buffer << 5) | value;
+        bitsLeft += 5;
+
+        if (bitsLeft >= 8) {
+            bytes.push((buffer >> (bitsLeft - 8)) & 0xFF);
+            bitsLeft -= 8;
+        }
+    }
+
+    return new Uint8Array(bytes);
+}
+
+// HMAC-SHA1 function
+async function hmacSha1(key, message) {
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        key,
+        { name: 'HMAC', hash: { name: 'SHA-1' } },
+        false,
+        ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, message);
+    return new Uint8Array(signature);
+}
+
+// Function to generate TOTP
+async function generateTOTP(secret, algorithm = 'SHA1', digits = 6, period = 30) {
+    const key = base32Decode(secret);
+    const time = Math.floor(Date.now() / 1000 / period);
+    const timeBuffer = new ArrayBuffer(8);
+    new DataView(timeBuffer).setBigUint64(0, BigInt(time));
+
+    const hmac = await hmacSha1(key, timeBuffer);
+    const offset = hmac[hmac.length - 1] & 0xf;
+    const code = ((hmac[offset] & 0x7f) << 24) |
+                 ((hmac[offset + 1] & 0xff) << 16) |
+                 ((hmac[offset + 2] & 0xff) << 8) |
+                 (hmac[offset + 3] & 0xff);
+
+    const otp = (code % Math.pow(10, digits)).toString().padStart(digits, '0');
+    return otp;
+}
+
+// Function to get current time
+function getCurrentTime() {
+    const now = new Date();
+    return now.toLocaleString();
+}
+
+// Function to get secret from URL parameters
+function getSecretFromURL() {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('secret');
+}
+
+function extractQuery(url) {
+    let query = url.split('?')[1];
+    return Object.fromEntries(new URLSearchParams(query));
+}
+
+function getTimeleft() {
+    const now = new Date();
+    return 30 - (now.getSeconds() % 30);
+}
+
+const secret = getSecretFromURL();
+if (secret) {
+    document.getElementById('otpauth').value = secret;
+    const data = extractQuery(secret);
+    const algorithm = data.algorithm;
+    const digits = data.digits;
+    const period = data.period;
+    const secretBase32 = data.secret;
+    setInterval(async () => {
+        const otp = await generateTOTP(secretBase32, algorithm, digits, period);
+        document.getElementById('totp').innerText = 'TOTP: ' + otp;
+        document.getElementById('time-left').innerText = 'Time left: ' + getTimeleft();
+        document.getElementById('current-time').innerText = 'Current Time: ' + getCurrentTime();
+    }, 500);
+}
+
+
+document.getElementById('generate').addEventListener('click', () => {
+    const secret = document.getElementById('otpauth').value;
+    window.location.href = window.location.href.split('?')[0] + '?secret=' + encodeURIComponent(secret);
+})
+</script>
+</html>
